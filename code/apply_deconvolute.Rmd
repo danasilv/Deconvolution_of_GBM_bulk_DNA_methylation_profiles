@@ -1,0 +1,85 @@
+---
+title: "deconvolue Horbinski"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(stringr)
+options(max.print = 1000)
+options(stringsAsFactors = FALSE)
+options(scipen = 999)
+library(data.table)
+library(useful)
+library(tibble)
+```
+
+```{r load resources}
+
+GBM.malignant.profiles.names <- c("V4","V5","V6")
+IDHmut.malignant.profiles.names <- c()
+non.malignant.profiles.names <- c("immune","neuron","glia")
+profiles.names <- c(GBM.malignant.profiles.names, IDHmut.malignant.profiles.names, non.malignant.profiles.names)
+
+```
+
+``` {r deconvolution functions}
+# Normalizes list of states
+normalize.states.to.one <- function(predicted.states, profiles.to.normalize)
+{
+  for (state in profiles.to.normalize){
+    save.colnames<-colnames(predicted.states)
+    predicted.states <- cbind(predicted.states, predicted.states[, state] / rowSums(predicted.states[, profiles.to.normalize]))
+    colnames(predicted.states) <- c(save.colnames, paste0(state, "_normalized"))
+  }
+  return (predicted.states)
+}
+
+```
+
+``` {r process idat to beta values}
+# inastall
+#BiocManager::install("minfi")
+# BiocManager::install("IlluminaHumanMethylationEPICmanifest")
+library(minfi)
+
+# Load bulk DNA methylation
+RGSet <- read.metharray.exp("idat files library", force=TRUE)
+MSet <- preprocessIllumina(RGSet)
+beta <- getBeta(MSet)
+EPIC.beta <- as.data.table(beta)
+EPIC.beta$probe <- rownames(MSet)
+
+``` 
+
+``` {r upload profiles}
+malignant.n.nonmalignant.profiles2 <- read.table("[where you saved the profiles provided with this code]/profiles_after_feature_selection_with_sc", sep = "\t") # These profiles are better for gainingcell state resolution, as the CpGs are filtered to thos stable with cell states and different among cell states. If you are interested in cell types and microenviorement composition more you can try "profiles_full"
+EPIC.beta.cohort.DNAme <- as.data.table(merge(malignant.n.nonmalignant.profiles2, EPIC.beta, by.x ="probe", by.y = "probe", all = FALSE))
+
+# IMPORTANT! Make sure the number of CpGs overlapping is 80K or more
+```
+
+
+``` {r deconvolute samples using meta profiles}
+patient.names <-colnames(EPIC.beta)
+patient.names <- patient.names[!patient.names %in% "probe"]
+EPIC.beta.cohort.DNAme <- EPIC.beta.cohort.DNAme[complete.cases(EPIC.beta.cohort.DNAme), ]
+cell.type.encoding.no.na <- EPIC.beta.cohort.DNAme[, ..profiles.names]
+Samples.no.na <- EPIC.beta.cohort.DNAme[, ..patient.names]
+
+library(EpiDISH)
+Samples.no.na2 <- (as.matrix(Samples.no.na))
+cell.type.encoding.no.na2 <- as.matrix(cell.type.encoding.no.na)
+rownames(Samples.no.na2) <- EPIC.beta.cohort.DNAme$probe
+rownames(cell.type.encoding.no.na2) <- EPIC.beta.cohort.DNAme$probe
+Estimates.rpc <-epidish(Samples.no.na2, ref.m =cell.type.encoding.no.na2, method = "RPC", maxit = 2000) 
+
+Samples.decomposition <- Estimates.rpc$estF
+predicted.cell.states <- normalize.states.to.one(as.data.frame(Samples.decomposition), GBM.malignant.profiles.names)
+K450.purity.estimate <- sum(Estimates.rpc$estF[,GBM.malignant.profiles.names])
+K450.purity.estimate <- rowSums(Estimates.rpc$estF[,GBM.malignant.profiles.names]) 
+
+# Save predictions
+a<- predicted.cell.states
+colnames(a) <- c("stem_like","diff2","diff1","immune","neuron","glia","stem_like_normalized", "diff2_normalized", "diff1_normalized")
+write.table(a, "[your results folder]/predicted_cell_states.csv")
+``` 
