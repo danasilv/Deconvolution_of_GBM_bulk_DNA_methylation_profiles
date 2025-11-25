@@ -1,5 +1,5 @@
 ---
-title: "deconvolue Horbinski"
+title: "apply_deconvolute"
 output: html_document
 ---
 
